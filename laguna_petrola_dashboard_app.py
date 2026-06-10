@@ -13,6 +13,7 @@ from datetime import datetime
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Attr
 
+
 #------------------------------------------------------------
 #------------------- CONFIGURACIÓN INICIAL ------------------
 #------------------------------------------------------------
@@ -100,40 +101,44 @@ st.markdown("""
 
 # Para que el tab de añadir nuevos datos y revocar actualización sean rojos y esten pegados a la derecha
 st.markdown("""
-        <style>
-            /* 1. Empujar la 5ª y 6ª pestaña a la derecha */
-            button[data-baseweb="tab"]:nth-child(5) {
-                margin-left: auto !important;
-            }
+    <style>
+        /* 1. Empujar la 5ª, 6ª y 7ª pestaña a la derecha */
+        button[data-baseweb="tab"]:nth-child(5) {
+            margin-left: auto !important;
+        }
 
-            /* 2. Estilo ROJO para las pestañas de ADMIN (5 y 6) */
-            button[data-baseweb="tab"]:nth-child(5), 
-            button[data-baseweb="tab"]:nth-child(6) {
-                border: 1px solid #ff4b4b !important;
-                border-radius: 5px 5px 0 0 !important;
-                background-color: #fff5f5 !important;
-                margin-right: 5px !important;
-            }
+        /* 2. Estilo ROJO para las pestañas de ADMIN (5, 6 y 7) */
+        button[data-baseweb="tab"]:nth-child(5), 
+        button[data-baseweb="tab"]:nth-child(6),
+        button[data-baseweb="tab"]:nth-child(7) {
+            border: 1px solid #ff4b4b !important;
+            border-radius: 5px 5px 0 0 !important;
+            background-color: #fff5f5 !important;
+            margin-right: 5px !important;
+        }
 
-            /* 3. Texto en rojo para ambas */
-            button[data-baseweb="tab"]:nth-child(5) p,
-            button[data-baseweb="tab"]:nth-child(6) p {
-                color: #ff4b4b !important;
-                font-weight: bold !important;
-            }
+        /* 3. Texto en rojo para las tres */
+        button[data-baseweb="tab"]:nth-child(5) p,
+        button[data-baseweb="tab"]:nth-child(6) p,
+        button[data-baseweb="tab"]:nth-child(7) p {
+            color: #ff4b4b !important;
+            font-weight: bold !important;
+        }
 
-            /* 4. Estilo cuando alguna de las de ADMIN está seleccionada */
-            button[data-baseweb="tab"]:nth-child(5)[aria-selected="true"],
-            button[data-baseweb="tab"]:nth-child(6)[aria-selected="true"] {
-                background-color: #ff4b4b !important;
-            }
+        /* 4. Estilo cuando alguna de las de ADMIN está seleccionada */
+        button[data-baseweb="tab"]:nth-child(5)[aria-selected="true"],
+        button[data-baseweb="tab"]:nth-child(6)[aria-selected="true"],
+        button[data-baseweb="tab"]:nth-child(7)[aria-selected="true"] {
+            background-color: #ff4b4b !important;
+        }
 
-            button[data-baseweb="tab"]:nth-child(5)[aria-selected="true"] p,
-            button[data-baseweb="tab"]:nth-child(6)[aria-selected="true"] p {
-                color: white !important;
-            }
-        </style>
-    """, unsafe_allow_html=True)
+        button[data-baseweb="tab"]:nth-child(5)[aria-selected="true"] p,
+        button[data-baseweb="tab"]:nth-child(6)[aria-selected="true"] p,
+        button[data-baseweb="tab"]:nth-child(7)[aria-selected="true"] p {
+            color: white !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
 
 
@@ -865,23 +870,23 @@ def obtener_metadata_actual_dynamo(use_cache=True):
 
 
 
-def monitorizar_actualizacion_lambda(nuevo_id_esperado, timeout_seg=600, is_revoke=False):
+def monitorizar_actualizacion_lambda(nuevo_id_esperado, timeout_seg=300, is_revoke=False):
     """Bloquea y monitoriza hasta que DynamoDB se actualice o pase el tiempo límite."""
     start_time = time.time()
     
     if is_revoke:
         mensaje_status = "🗑️ Revocando insercciones..."
     else:
-        mensaje_status = "🛠️ Procesando muestras en AWS..."
+        mensaje_status = "🛠️ Procesando muestras en..."
     
     with st.status(mensaje_status, expanded=True) as status:
-        st.write("La Lambda está trabajando. Esto puede tardar unos minutos...")
+        st.write("Se están procesando las muestras. Esto puede tardar unos minutos...")
         placeholder_info = st.empty()
-        
+
         while (time.time() - start_time) < timeout_seg:
-            # Consultamos SIN CACHE para detectar el cambio al segundo
+            # Consulta a DynamoDB solo una vez por ciclo
             meta = obtener_metadata_actual_dynamo(use_cache=False)
-            
+
             if meta and meta.get("last_execution_id") == nuevo_id_esperado:
                 status.update(label="Datos procesados con éxito", state="complete", expanded=False)
                 st.cache_data.clear()
@@ -890,11 +895,14 @@ def monitorizar_actualizacion_lambda(nuevo_id_esperado, timeout_seg=600, is_revo
                 st.session_state["uploader_key"] += 1
                 st.rerun()
                 return
-            
-            # Feedback al usuario
-            elapsed = int(time.time() - start_time)
-            placeholder_info.caption(f"Tiempo en espera: {elapsed}s / {timeout_seg}s")
-            time.sleep(20) # Consultamos cada 20 segundos
+
+            # Cuenta 1 a 1 durante 20s sin volver a consultar DynamoDB
+            for _ in range(20):
+                if (time.time() - start_time) >= timeout_seg:
+                    break
+                elapsed = int(time.time() - start_time)
+                placeholder_info.caption(f"⏳ Tiempo en espera: {elapsed}s / {timeout_seg}s")
+                time.sleep(1)
 
         status.update(label="El proceso ha tardado demasiado", state="error")
         st.error("La base de datos no se ha actualizado en 10 min. Revisa AWS.")
@@ -1001,6 +1009,140 @@ def eliminar_insercion_aws(ids_a_revocar, execution_id):
         return False
 
 
+
+
+
+def _get_dynamodb_resource():
+    creds = st.secrets["aws_credentials"]
+    return boto3.resource(
+        'dynamodb',
+        aws_access_key_id=creds['aws_access_key_id'],
+        aws_secret_access_key=creds['aws_secret_access_key'],
+        aws_session_token=creds.get('aws_session_token'),
+        region_name=creds['region_name']
+    )
+ 
+ 
+@st.cache_data
+def obtener_updatelog():
+    """Obtiene todos los registros de UpdateLog y los devuelve como DataFrame."""
+    try:
+        table = _get_dynamodb_resource().Table("UpdateLog")
+        response = table.scan(
+            ProjectionExpression=(
+                "#ts, execution_id, operation_type, operation_status, "
+                "#usr, records_affected, number_of_files, excel_files, "
+                "duration_ms, target_entity, total_samples_after_operation"
+            ),
+            ExpressionAttributeNames={"#ts": "timestamp", "#usr": "user"}
+        )
+        items = response.get('Items', [])
+        df = pd.DataFrame(items)
+ 
+        if not df.empty:
+            df['timestamp'] = (
+                pd.to_datetime(df['timestamp'])
+                .dt.tz_convert('Europe/Madrid')
+            )
+            df = df.sort_values('timestamp', ascending=False)
+            df['timestamp'] = df['timestamp'].dt.strftime('%d/%m/%Y - %H:%M')
+            df = df[[
+                'execution_id', 'timestamp', 'operation_type',
+                'operation_status', 'user', 'records_affected',
+                'number_of_files', 'excel_files',
+                'duration_ms', 'target_entity',
+                'total_samples_after_operation'
+            ]]
+        return df
+ 
+    except Exception as e:
+        st.error(f"❌ Error al consultar UpdateLog: {e}")
+        return pd.DataFrame()
+ 
+ 
+@st.cache_data
+def obtener_discardedlog():
+    """Obtiene todos los registros de DiscardedLog y los devuelve como DataFrame."""
+    try:
+        table = _get_dynamodb_resource().Table("DiscardedLog")
+        response = table.scan(
+            ProjectionExpression=(
+                "#ts, execution_id, #typ, cause, #act, #fi, #sh, #rw"
+            ),
+            ExpressionAttributeNames={
+                "#ts":  "timestamp",
+                "#typ": "type",
+                "#act": "action",
+                "#fi":  "file",
+                "#sh":  "sheet",
+                "#rw":  "row"
+            }
+        )
+        items = response.get('Items', [])
+        df = pd.DataFrame(items)
+ 
+        if not df.empty:
+            df['timestamp'] = (
+                pd.to_datetime(df['timestamp'])
+                .dt.tz_convert('Europe/Madrid')
+            )
+            df = df.sort_values('timestamp', ascending=False)
+            df['timestamp'] = df['timestamp'].dt.strftime('%d/%m/%Y - %H:%M')
+            df = df[['execution_id', 'timestamp', 'type', 'cause', 'action',
+                      'file', 'sheet', 'row']]
+        return df
+ 
+    except Exception as e:
+        st.error(f"❌ Error al consultar DiscardedLog: {e}")
+        return pd.DataFrame()
+ 
+ 
+@st.cache_data
+def obtener_currentstatus():
+    """Obtiene el registro único de CurrentStatus y lo devuelve como DataFrame."""
+    try:
+        table = _get_dynamodb_resource().Table("CurrentStatus")
+        response = table.scan(
+            ProjectionExpression=(
+                "status_id, current_file, last_execution_id, "
+                "processing_status, updated_at"
+            )
+        )
+        items = response.get('Items', [])
+        df = pd.DataFrame(items)
+ 
+        if not df.empty:
+            df = df[['status_id', 'current_file', 'last_execution_id',
+                      'processing_status', 'updated_at']]
+        return df
+ 
+    except Exception as e:
+        st.error(f"❌ Error al consultar CurrentStatus: {e}")
+        return pd.DataFrame()
+
+
+TABLE_CONFIG = {
+    "Registro de Actualizaciones": {
+        "fn": obtener_updatelog,
+        "description": "Registro completo de todas las operaciones de inserción, "
+                       "actualización y rollback realizadas sobre el sistema.",
+    },
+    "Registro de Datos Descartados": {
+        "fn": obtener_discardedlog,
+        "description": "Elementos descartados durante los procesos de inserción: "
+                       "archivos, hojas o filas que no superaron la validación.",
+    },
+    "Estado Actual": {
+        "fn": obtener_currentstatus,
+        "description": "Estado actual del sistema: archivo maestro vigente y "
+                       "estado del procesamiento en tiempo real.",
+    },
+}
+
+
+
+
+
 #------------------------------------------------------------
 #------------------- AUTENTIFICACIÓN DE USUARIO--------------
 #------------------------------------------------------------
@@ -1040,6 +1182,8 @@ if not st.session_state.logged_in:
     st.stop()
 
 
+if "confirmando_eliminacion" not in st.session_state:
+    st.session_state.confirmando_eliminacion = False
 
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -1126,7 +1270,7 @@ with st.container():
     
     # Si es admin, puede ver las secciones de añadir_datos y eliminar insercciones
     if st.session_state.get("role") == "admin":
-        compuestos_tab, stations_tab, time_tab, filtered_data_tab, add_data_tab, delete_insertions_tab = st.tabs(["🧪 Compuestos y Grupos", "📡 Estaciones", "📈 Evolución Temporal","📄 Datos Filtrados", "➕ Añadir nuevos datos", "🚫 Eliminar insercciones"])
+        compuestos_tab, stations_tab, time_tab, filtered_data_tab, add_data_tab, delete_insertions_tab, audit_tab = st.tabs(["🧪 Compuestos y Grupos", "📡 Estaciones", "📈 Evolución Temporal","📄 Datos Filtrados", "➕ Añadir nuevos datos", "🚫 Eliminar insercciones", "🗂️ Auditoría"])
     else:
         compuestos_tab, stations_tab, time_tab, filtered_data_tab = st.tabs(["🧪 Compuestos y Grupos", "📡 Estaciones", "📈 Evolución Temporal","📄 Datos Filtrados"])
     
@@ -1176,7 +1320,7 @@ with st.container():
 
             st.markdown("<span style='font-weight: 900;'>Rango de Match Factor</span>", unsafe_allow_html=True)
             min_mf = float(df_petrola["match_factor"].min())
-            max_mf = float(df_petrola["match_factor"].max())
+            max_mf = float(100)#df_petrola["match_factor"].max())
             match_factor_sel = st.slider(
                 "Selecciona rango Match Factor",
                 min_value=min_mf,
@@ -1217,10 +1361,25 @@ with st.container():
             tipo_estacion_sel = st.multiselect("Tipos de estación", tipos_estacion, default=None, placeholder='Todos')
             filtros['tipo_estacion'] = tipo_estacion_sel
 
+
             # Estaciones
             estaciones = sorted(df_petrola["station_id"].dropna().unique())
-            estacion_sel = st.multiselect("Estación(es)", estaciones, default=None, placeholder='Todos')
-            filtros['estaciones'] = estacion_sel
+            # Diccionario id -> etiqueta legible
+            etiquetas_estacion = {
+                sid: f"{sid} - {df_petrola.loc[df_petrola['station_id'] == sid, 'st_type'].iloc[0]}"
+                for sid in estaciones
+            }
+            estacion_sel_labels = st.multiselect(
+                "Estación(es)",
+                options=list(etiquetas_estacion.values()),
+                default=None,
+                placeholder='Todos'
+            )
+
+            # Revertir a IDs para filtrar
+            label_to_id = {v: k for k, v in etiquetas_estacion.items()}
+            estacion_sel = [label_to_id[label] for label in estacion_sel_labels]
+            filtros['estaciones'] = [label_to_id[label] for label in estacion_sel_labels]
 
            
 
@@ -1262,8 +1421,12 @@ with st.container():
             # Agregar por Grupo/Compuesto o Estación
             filtros_time_bar.text("")
             filtros_time_bar.text("")
-            st.markdown("<span style='font-weight: 900;'>Agregar por </span>", unsafe_allow_html=True)
-            modo_estacion = st.selectbox("Tipo de agregación:", ["Grupo/Compuesto", "Estación"])
+            #st.markdown("<span style='font-weight: 900;'></span>", unsafe_allow_html=True)
+            modo_estacion = st.selectbox(
+                "Agregar por:",
+                ["Grupo/Compuesto", "Estación"],
+                help="En ambos casos se muestra el **conteo de detecciones** por período."
+            )
             filtros['modo_estacion'] = modo_estacion
 
             if modo_estacion == "Estación" and (len(nombre_compuesto_sel) > 4 or len(familia_sel) > 4 or len(estacion_sel) > 4):
@@ -1343,7 +1506,6 @@ with st.container():
 
                 with tabla_eleccion:
                     st.markdown("### Selecciona las inserciones específicas que deseas eliminar.")
-                    #st.markdown(' El sistema reconstruirá la base de datos excluyendo dichos datos y manteniendo el resto de inserciones intactas.')
                     
                     # Configuramos la tabla con selección
                     event = st.dataframe(
@@ -1417,19 +1579,25 @@ with st.container():
                             st.markdown(f"Después de esta operación, el sistema quedará con **{int(total_final):,}** muestras totales. Esta operación no se podrá revertir. ¿Está seguro?")
 
                             
-                            # El botón que lo cambia todo
-                            if st.button("Confirmar y eliminar", type="primary", use_container_width=True):
-                                # Generamos el ID
+                            if st.button(
+                                "Confirmar y eliminar",
+                                type="primary",
+                                use_container_width=True,
+                                disabled=st.session_state.confirmando_eliminacion  # se deshabilita tras el primer click
+                            ):
+                                st.session_state.confirmando_eliminacion = True  # bloquea inmediatamente
+
                                 new_id = f"exec-{datetime.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8]}"
-                                
-                                # Lanzamos a AWS
                                 exito = eliminar_insercion_aws(ids_a_revocar, new_id)
-                                
+
                                 if exito:
-                                    # 🚩 ACTIVAMOS EL INTERRUPTOR
                                     st.session_state.ejecutando_revocacion = True
                                     st.session_state.id_nueva_operacion = new_id
-                                    # Refrescamos para que el "CASO A" tome el control y el panel desaparezca
+                                    st.session_state.confirmando_eliminacion = False  # reset para la próxima vez
+                                    st.rerun()
+                                else:
+                                    # Si falla, liberamos el bloqueo para que pueda reintentar
+                                    st.session_state.confirmando_eliminacion = False
                                     st.rerun()
 
                     else:
@@ -1443,20 +1611,58 @@ with st.container():
                     st.write("")
                     st.info(
                         "**Pasos para el proceso de revocado:**\n\n"
-                        "1. **Selección:** Marca en la tabla las ejecuciones que deseas eliminar del Datalake.\n"
-                        "2. **Confirmación:** Pulsa el botón rojo para iniciar el proceso en AWS.\n"
-                        "3. **Sincronización:** El sistema monitorizará el estado hasta que los punteros vuelvan a la versión anterior."
+                        "1. **Selección:** Marca en la tabla las ejecuciones que deseas eliminar del sistema.\n"
+                        "2. **Confirmación:** Pulsa el botón para iniciar el proceso y espere unos segundos.\n"
+                        "3. **Sincronización:** El sistema monitorizará el estado hasta que se complete la eliminación."
                     )
                     
                     st.markdown("""
                         > **Detalles relevantes del proceso:**
                         > - El revocado eliminará las particiones correspondientes en la capa **Gold**.
-                        > - Se actualizará el registro en `CurrentStatus` automáticamente.
+                        > - Se actualizará el registro en la tabla `Estado Actual` automáticamente.
                         > - Este proceso **no se puede deshacer** una vez finalizado.
                     """)
 
                 with vacio_add:
                     pass
+        
+        
+        with audit_tab:
+        
+            col_selector, col_table = st.columns([1, 3])
+        
+            with col_selector:
+                tabla_seleccionada = st.selectbox(
+                    "Selecciona una tabla",
+                    options=list(TABLE_CONFIG.keys()),
+                    index=0,               # UpdateLog por defecto
+                    help="Elige qué tabla de auditoría quieres consultar."
+                )
+
+                st.info(
+                    "**Tablas de Metadatos del Sistema:**\n\n"
+                    "- **Registro de Actualizaciones**: Registro cronológico de todas las operaciones de inserción, "
+                    "actualización y rollback realizadas sobre el sistema.\n\n"
+                    "- **Registro de Datos Descartados**: Registro de todos los elementos (archivos, hojas o filas) "
+                    "descartados durante los procesos de inserción por no superar la validación.\n\n"
+                    "- **Estado Actual**: Estado actual del sistema. Indica el archivo maestro vigente "
+                    "y si hay un proceso de inserción en curso."
+                )
+        
+                if st.button("Refrescar datos", use_container_width=True):
+                    st.cache_data.clear()
+                    st.rerun()
+        
+            with col_table:
+                config = TABLE_CONFIG[tabla_seleccionada]
+                df_audit = config["fn"]()
+        
+                if df_audit.empty:
+                    st.info("No hay registros disponibles para esta tabla.")
+                else:
+                    st.caption(f"{len(df_audit)} registros encontrados")
+                    st.dataframe(df_audit, use_container_width=True, hide_index=True)
+
 
 # Se filtra el Dataframe usando los filtros seleccionados
 df_filtrado, orden = aplicar_filtros(df_petrola, filtros)
