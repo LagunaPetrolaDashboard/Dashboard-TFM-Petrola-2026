@@ -1030,7 +1030,7 @@ def obtener_updatelog():
         table = _get_dynamodb_resource().Table("UpdateLog")
         response = table.scan(
             ProjectionExpression=(
-                "#ts, execution_id, operation_type, operation_status, "
+                "#ts, execution_id, operation_type, operation_status, details, "
                 "#usr, records_affected, number_of_files, excel_files, "
                 "duration_ms, target_entity, total_samples_after_operation"
             ),
