@@ -1047,7 +1047,7 @@ def obtener_updatelog():
             df = df.sort_values('timestamp', ascending=False)
             df['timestamp'] = df['timestamp'].dt.strftime('%d/%m/%Y - %H:%M')
             df = df[[
-                'execution_id', 'timestamp', 'operation_type',
+                'execution_id', 'timestamp', 'operation_type', 'details',
                 'operation_status', 'user', 'records_affected',
                 'number_of_files', 'excel_files',
                 'duration_ms', 'target_entity',
